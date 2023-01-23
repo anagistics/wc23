@@ -24,7 +24,13 @@ thelist <- team_urls
 tmp <- thelist |> map(process_team, base_url = ihf_base, .progress = TRUE) |> list_c()
 player_table <- str_split_fixed(tmp, "\n", n = 4) |> as_tibble(.name_repair = "unique")
 names(player_table) <- c("FIRST_NAME", "SECOND_NAME", "CLUB", "POSITION")
+cntry_pos <- str_match(player_table$POSITION,"(?<COUNTRY>.+)\\s-\\s(?<POSITION>.+)") |> 
+  as_tibble(.name_repair="unique")
+player_table$COUNTRY <- cntry_pos$COUNTRY
+player_table$POSITION <- cntry_pos$POSITION
+clb_name <- str_match(player_table$CLUB,"Club:\\s(?<NAME>.+)") |> as_tibble(.name_repair = "unique")
+player_table$CLUB <- clb_name$NAME
 
-player_table |> group_by(CLUB) |> summarise(N = n()) |> slice_max(n = 10, order_by = N)
+player_table |> group_by(CLUB) |> summarise(N = n()) |> slice_max(n = 15, order_by = N)
 
 
