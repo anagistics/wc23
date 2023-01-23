@@ -1,0 +1,111 @@
+---
+title: "Handball WC23 Analysis"
+author: "Andreas Cardeneo"
+format: html
+editor: visual
+---
+
+## Setup
+
+We first load the required libraries
+
+```{r}
+library(rvest)
+library(tidyverse)
+```
+
+### Web resources
+
+Next, we set the *International Handball Federation* (IHF) URLs where we will retrieve the data from.
+
+```{r}
+ihf_base <- "https://www.ihf.info"
+ihf_wc2023 <- "/competitions/men/308/28th-ihf-mens-world-championship-2023/101253"
+ihfurl <- paste0(ihf_base, ihf_wc2023)
+```
+
+## Loading data
+
+With these setup steps, we load the start page where we will find the links to each team.
+
+```{r}
+page <- read_html(ihfurl)
+```
+
+## Process pages
+
+To process the HTML pages we define two small functions that will help to make our analysis script a little bit clearer syntactically. Note that these functions contain the selectors used to identify the correct places in the HTML documents where the team overview resp. the player information can be found. These selectors have been found using the developer tools of Google Chrome.
+
+```{r}
+team_list <- function(src) {
+  src |> html_element(css = "#block-views-block-teams-flags-list-block-1-2 > div > div")
+}
+
+process_team <- function(team_url, base_url) {
+  team_page <- read_html(paste0(base_url, team_url))
+  team_page |> html_elements("#block-ihf-theme-content > div > div > section > div > div:nth-child(1) > div > div.row") |>
+    html_nodes("a") |> html_text2()
+}
+
+```
+
+### Team overview page
+
+```{r}
+team_urls <- page |> team_list() |> html_nodes("a") |> html_attr("href")
+
+thelist <- team_urls
+
+```
+
+The variable `thelist` is introduced to simplify debugging and testing as it is easy to reduce the size of the team list.
+
+### Player data
+
+We first process each link to a team with the above defined `process_team` function.
+
+```{r}
+tmp <- thelist |> 
+  map(process_team, base_url = ihf_base, .progress = TRUE) |> 
+  list_c()
+
+```
+
+Having done that, we need to process the strings we find in the extracted text elements in order to extract (and clean) team names, nations and positions.
+
+```{r}
+player_table <- str_split_fixed(tmp, "\n", n = 4) |> as_tibble(.name_repair = "unique")
+names(player_table) <- c("FIRST_NAME", "SECOND_NAME", "CLUB", "POSITION")
+cntry_pos <- str_match(player_table$POSITION,"(?<COUNTRY>.+)\\s-\\s(?<POSITION>.+)") |> 
+  as_tibble(.name_repair="unique")
+player_table$COUNTRY <- cntry_pos$COUNTRY
+player_table$POSITION <- cntry_pos$POSITION
+clb_name <- str_match(player_table$CLUB,"Club:\\s(?<NAME>.+)") |> as_tibble(.name_repair = "unique")
+player_table$CLUB <- clb_name$NAME
+
+```
+
+## Analysis
+
+### Teams that send the most players to the championship
+
+```{r}
+player_table |> 
+  group_by(CLUB) |> 
+  summarise(N = n()) |> 
+  slice_max(n = 15, order_by = N) |>
+  ggplot(aes(x = reorder(CLUB, N), y = N)) + geom_col(fill = "blue") + 
+  coord_flip() + xlab("Team") + ylab("Number of players")
+```
+
+### Number of different teams national teams come from
+
+```{r}
+player_table |> 
+  group_by(COUNTRY) |> 
+  summarise(NT = n_distinct(CLUB)) |> 
+  slice_min(n = 5, order_by = NT) |>
+  ggplot(aes(x = reorder(COUNTRY, -NT), y = NT)) + geom_col(fill = "blue") +
+  coord_flip() + xlab("National team") + 
+  ylab("Number of different teams players come from")
+```
