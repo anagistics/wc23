@@ -12,6 +12,7 @@ We first load the required libraries
 ```{r}
 library(rvest)
 library(tidyverse)
+library(furrr)
 ```
 
 ### Web resources
@@ -41,12 +42,28 @@ team_list <- function(src) {
   src |> html_element(css = "#block-views-block-teams-flags-list-block-1-2 > div > div")
 }
 
-process_team <- function(team_url, base_url) {
-  team_page <- read_html(paste0(base_url, team_url))
-  team_page |> html_elements("#block-ihf-theme-content > div > div > section > div > div:nth-child(1) > div > div.row") |>
-    html_nodes("a") |> html_text2()
+process_player <- function(player_url, base_url) {
+  player_page <- read_html(paste0(base_url, player_url))
+  tmp <- player_page |> html_elements("#block-ihf-theme-content > div > div > div > div > div.col-md-7") |>
+    html_nodes("h3")
+  elems <- tmp |> html_text2() 
+  tibble(BIRTHDAY = elems[[3]], AGE = elems[[5]], 
+         HEIGHT = str_sub(elems[[6]], 1, 3) |> as.integer(), 
+         WEIGHT = str_sub(elems[[7]], 1, -3) |> as.integer())
 }
 
+process_team <- function(team_url, base_url) {
+  team_page <- read_html(paste0(base_url, team_url))
+  tmp <- team_page |> html_elements("#block-ihf-theme-content > div > div > section > div > div:nth-child(1) > div > div.row") |>
+    html_nodes("a") 
+  data <- tmp |> html_text2()
+  players <- str_split_fixed(data, "\n", n = 4) |> as_tibble(.name_repair = "unique")
+  names(players) <- c("FIRST_NAME", "SECOND_NAME", "CLUB", "POSITION")
+  players$HREF <- tmp |> html_attr("href")
+  
+  details <- players$HREF |> map_dfr(process_player, base_url = base_url, .progress = TRUE)
+  bind_cols(players, details)
+}
 ```
 
 ### Team overview page
@@ -62,28 +79,42 @@ The variable `thelist` is introduced to simplify debugging and testing as it is 
 
 ### Player data
 
-We first process each link to a team with the above defined `process_team` function.
+We process each link to a team with the above defined `process_team` function that in turn loads each player profile from the player's page. We do so in parallel using some worker processes using the `furrr` package.
 
 ```{r}
-tmp <- thelist |> 
-  map(process_team, base_url = ihf_base, .progress = TRUE) |> 
-  list_c()
+plan(multisession, workers = 8)
+
+player_table <- thelist |> 
+  future_map_dfr(process_team, base_url = ihf_base, .progress = TRUE) 
+
 
 ```
 
 Having done that, we need to process the strings we find in the extracted text elements in order to extract (and clean) team names, nations and positions.
 
 ```{r}
-player_table <- str_split_fixed(tmp, "\n", n = 4) |> as_tibble(.name_repair = "unique")
-names(player_table) <- c("FIRST_NAME", "SECOND_NAME", "CLUB", "POSITION")
-cntry_pos <- str_match(player_table$POSITION,"(?<COUNTRY>.+)\\s-\\s(?<POSITION>.+)") |> 
+cntry_pos <- player_table$POSITION |> 
+  str_match("(?<COUNTRY>.+)\\s-\\s(?<POSITION>.+)") |> 
   as_tibble(.name_repair="unique")
 player_table$COUNTRY <- cntry_pos$COUNTRY
 player_table$POSITION <- cntry_pos$POSITION
-clb_name <- str_match(player_table$CLUB,"Club:\\s(?<NAME>.+)") |> as_tibble(.name_repair = "unique")
+clb_name <- player_table$CLUB |> 
+  str_match("Club:\\s(?<NAME>.+)") |> 
+  as_tibble(.name_repair = "unique")
 player_table$CLUB <- clb_name$NAME
-
 ```
+
+Now we safe the dataset locally as it takes quite some time to retrieve and build it.
+
+```{r}
+player_table |> write_csv2("./player_table_wc23.csv")
+```
+
+## Corrections
+
+Still missing: There are errors in the data on the website. These need to be corrected manually.
+
+Some player pages, especially for Chile, are wrongly formatted and height cannot be read by the method above.
 
 ## Analysis
 
